@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>블랙 포스트잇</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="board"></main>
+  <p class="hint">펜으로 쓰고, 종이 아래쪽을 위로 쓸어올리면 한 장 넘어가요</p>
+
+  <div id="tools">
+    <button id="penBtn" class="tool on">✏️ 연필</button>
+    <button id="eraserBtn" class="tool">🧽 지우개</button>
+  </div>
+
+  <button id="trashBtn" aria-label="버린 포스트잇 보기">🗑<span id="badge">0</span></button>
+
+  <section id="overlay" hidden>
+    <div class="panel">
+      <header>
+        <button id="closeBtn">닫기</button>
+        <h2>버린 포스트잇</h2>
+        <button id="selBtn">선택</button>
+      </header>
+      <div id="grid"></div>
+      <div id="bar" hidden>
+        <button id="allBtn">전체 선택</button>
+        <button id="delBtn" class="danger">삭제 (0)</button>
+      </div>
+    </div>
+  </section>
+
+  <script src="script.js"></script>
+</body>
+</html>
