@@ -65,8 +65,6 @@ function addDiscard(cfg, canvas) {
   });
 
   if (next.length > 100) next.shift();
-
-  // 저장에 실패하면 원래 메모를 유지
   if (!save(DISCARD_KEY, next)) return false;
 
   discarded = next;
@@ -74,7 +72,7 @@ function addDiscard(cfg, canvas) {
   return true;
 }
 
-/* ----- 포스트잇 뭉치 ----- */
+/* ----- 포스트잇 ----- */
 
 function buildPad(cfg) {
   const pad = document.createElement("div");
@@ -112,7 +110,49 @@ function buildPad(cfg) {
   let tearing = false;
   let restoring = false;
 
-  /* 저장된 필기 불러오기 */
+  let saveTimer = null;
+  let dirty = false;
+
+  let startY = null;
+  let dy = 0;
+  let peelPointerId = null;
+
+  /* ----- 저장 ----- */
+
+  function saveNow() {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+
+    if (!dirty || restoring || tearing) return;
+
+    if (save(padKey, canvas.toDataURL("image/png"))) {
+      dirty = false;
+    }
+  }
+
+  function scheduleSave() {
+    clearTimeout(saveTimer);
+
+    saveTimer = setTimeout(function () {
+      saveTimer = null;
+
+      // 펜슬이 닿아 있는 동안에는 저장하지 않음
+      if (drawing) return;
+
+      saveNow();
+    }, 800);
+  }
+
+  // 다른 앱으로 이동하거나 페이지를 떠날 때 저장 시도
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") {
+      saveNow();
+    }
+  });
+
+  window.addEventListener("pagehide", saveNow);
+
+  /* ----- 기존 필기 불러오기 ----- */
 
   const saved = load(padKey, null);
 
@@ -155,10 +195,23 @@ function buildPad(cfg) {
     return 7;
   }
 
+  function drawTo(e) {
+    const point = pos(e);
+
+    ctx.lineWidth = lineWidth(e);
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(point.x, point.y);
+    ctx.stroke();
+
+    last = point;
+    dirty = true;
+  }
+
   /* ----- 애플펜슬 / 마우스 필기 ----- */
 
   canvas.addEventListener("pointerdown", function (e) {
-    // 손가락과 손바닥은 필기에 사용하지 않음
+    // 손가락과 손바닥 입력 무시
     if (e.pointerType === "touch") return;
     if (e.pointerType === "mouse" && e.button !== 0) return;
 
@@ -172,6 +225,10 @@ function buildPad(cfg) {
     }
 
     e.preventDefault();
+
+    // 다음 획을 쓰기 시작하면 예약된 저장 취소
+    clearTimeout(saveTimer);
+    saveTimer = null;
 
     activePointerId = e.pointerId;
     drawing = true;
@@ -187,22 +244,24 @@ function buildPad(cfg) {
 
     ctx.lineWidth = lineWidth(e);
 
-    // 펜슬을 살짝 찍어도 점이 남도록 처리
+    // 짧게 찍어도 점이 남도록 처리
     ctx.beginPath();
     ctx.moveTo(last.x, last.y);
     ctx.lineTo(last.x + 0.01, last.y);
     ctx.stroke();
 
-    if (strokeTool === "pen") hasInk = true;
+    dirty = true;
+
+    if (strokeTool === "pen") {
+      hasInk = true;
+    }
   }, { passive: false });
 
   canvas.addEventListener("pointermove", function (e) {
-    // 현재 필기 중인 펜슬 입력만 처리
     if (!drawing || e.pointerId !== activePointerId) return;
 
     e.preventDefault();
 
-    // 브라우저가 모아둔 세부 이동 좌표를 함께 사용
     const points =
       typeof e.getCoalescedEvents === "function"
         ? e.getCoalescedEvents()
@@ -211,21 +270,17 @@ function buildPad(cfg) {
     const samples = points.length ? points : [e];
 
     for (const sample of samples) {
-      const p = pos(sample);
-
-      ctx.lineWidth = lineWidth(sample);
-      ctx.beginPath();
-      ctx.moveTo(last.x, last.y);
-      ctx.lineTo(p.x, p.y);
-      ctx.stroke();
-
-      last = p;
+      drawTo(sample);
     }
   }, { passive: false });
 
   function endDraw(e) {
-    // 손바닥이 떨어지는 이벤트로 필기를 끝내지 않음
+    // 손바닥의 이벤트로 펜슬 필기를 끝내지 않음
     if (e.pointerId !== activePointerId) return;
+
+    if (e.type === "pointerup" && last) {
+      drawTo(e);
+    }
 
     const pointerId = activePointerId;
 
@@ -237,21 +292,23 @@ function buildPad(cfg) {
       canvas.releasePointerCapture(pointerId);
     }
 
-    save(padKey, canvas.toDataURL("image/png"));
+    // 즉시 저장하지 않고 필기가 멈출 때까지 기다림
+    scheduleSave();
   }
 
   canvas.addEventListener("pointerup", endDraw);
   canvas.addEventListener("pointercancel", endDraw);
   canvas.addEventListener("lostpointercapture", endDraw);
 
-  /* ----- 종이 아래쪽을 밀어 넘기기 ----- */
+  /* ----- 종이 넘기기 ----- */
 
-  let startY = null;
-  let dy = 0;
-  let peelPointerId = null;
+  function resetSheet() {
+    sheet.style.transition = "transform 0.25s, opacity 0.25s";
+    sheet.style.transform = "";
+    sheet.style.opacity = "1";
+  }
 
   peel.addEventListener("pointerdown", function (e) {
-    // 필기 중 손바닥이 닿아도 종이를 넘기지 않음
     if (
       drawing ||
       tearing ||
@@ -289,12 +346,6 @@ function buildPad(cfg) {
       "translateY(" + dy + "px) rotate(" + dy / 200 + "deg)";
   }, { passive: false });
 
-  function resetSheet() {
-    sheet.style.transition = "transform 0.25s, opacity 0.25s";
-    sheet.style.transform = "";
-    sheet.style.opacity = "1";
-  }
-
   function endPeel(e) {
     if (
       startY === null ||
@@ -331,9 +382,13 @@ function buildPad(cfg) {
   function tear() {
     if (tearing || drawing || restoring) return;
 
-    // 先に保存し、失敗した場合は元のメモを残す
+    clearTimeout(saveTimer);
+    saveTimer = null;
+
+    // 휴지통 저장에 실패하면 원래 종이를 유지
     if (hasInk && !addDiscard(cfg, canvas)) {
       resetSheet();
+      scheduleSave();
       return;
     }
 
@@ -344,21 +399,23 @@ function buildPad(cfg) {
       "translateY(-" + sheet.offsetHeight * 1.2 + "px)";
     sheet.style.opacity = "0";
 
+    // 휴지통에 저장한 뒤 현재 메모 저장값 제거
+    try {
+      localStorage.removeItem(padKey);
+    } catch (e) {
+      // 애니메이션은 계속 진행
+    }
+
+    dirty = false;
+
     setTimeout(function () {
       ctx.globalCompositeOperation = "source-over";
       ctx.clearRect(0, 0, SIZE, SIZE);
       hasInk = false;
 
-      try {
-        localStorage.removeItem(padKey);
-      } catch (e) {
-        // 화면 초기화는 계속 진행
-      }
-
       sheet.style.transition = "none";
       sheet.style.transform = "";
 
-      // 위치를 먼저 되돌린 뒤 새 종이를 표시
       void sheet.offsetHeight;
 
       sheet.style.transition = "opacity 0.25s";
@@ -392,7 +449,7 @@ eraserBtn.addEventListener("click", function () {
   setTool("eraser");
 });
 
-/* ----- 휴지통 화면 ----- */
+/* ----- 휴지통 ----- */
 
 let selMode = false;
 let picked = {};
