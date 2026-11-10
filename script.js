@@ -29,6 +29,8 @@ const bar = document.getElementById("bar");
 const selBtn = document.getElementById("selBtn");
 const delBtn = document.getElementById("delBtn");
 
+document.getElementById("board").style.touchAction = "none";
+
 function updateBadge() {
   badge.textContent = discarded.length;
 }
@@ -70,11 +72,18 @@ function buildPad(cfg) {
   ctx.lineJoin = "round";
   ctx.strokeStyle = "#1a1a1a";
 
+  canvas.style.touchAction = "none";
+  peel.style.touchAction = "none";
+  ["touchstart", "touchmove"].forEach(function (name) {
+    canvas.addEventListener(name, function (e) { e.preventDefault(); }, { passive: false });
+    peel.addEventListener(name, function (e) { e.preventDefault(); }, { passive: false });
+  });
+
   let hasInk = false;
   let drawing = false;
-  let activeId = null;
   let last = null;
   let saveTimer = null;
+  let rev = 0;
 
   const saved = load(padKey, null);
   if (saved) {
@@ -97,7 +106,6 @@ function buildPad(cfg) {
 
   canvas.addEventListener("pointerdown", function (e) {
     drawing = true;
-    activeId = e.pointerId;
     clearTimeout(saveTimer);
     try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
     last = pos(e);
@@ -111,7 +119,7 @@ function buildPad(cfg) {
   });
 
   canvas.addEventListener("pointermove", function (e) {
-    if (!drawing || e.pointerId !== activeId) return;
+    if (!drawing) return;
     const list = (e.getCoalescedEvents && e.getCoalescedEvents().length)
       ? e.getCoalescedEvents()
       : [e];
@@ -128,27 +136,35 @@ function buildPad(cfg) {
 
   function saveNow() {
     if (drawing) {
-      saveTimer = setTimeout(saveNow, 3000);
+      saveTimer = setTimeout(saveNow, 5000);
       return;
     }
-    save(padKey, canvas.toDataURL("image/png"));
+    const myRev = rev;
+    canvas.toBlob(function (blob) {
+      if (!blob) return;
+      const fr = new FileReader();
+      fr.onload = function () {
+        if (myRev !== rev || drawing) return;
+        save(padKey, fr.result);
+      };
+      fr.readAsDataURL(blob);
+    }, "image/png");
   }
-  function endDraw(e) {
-    if (e.pointerId !== activeId) return;
+  function endDraw() {
     drawing = false;
-    activeId = null;
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveNow, 3000);
+    saveTimer = setTimeout(saveNow, 5000);
   }
   canvas.addEventListener("pointerup", endDraw);
   canvas.addEventListener("pointercancel", endDraw);
-  window.addEventListener("pagehide", function () {
+  canvas.addEventListener("lostpointercapture", endDraw);
+
+  function saveSync() {
     if (hasInk) save(padKey, canvas.toDataURL("image/png"));
-  });
+  }
+  window.addEventListener("pagehide", saveSync);
   document.addEventListener("visibilitychange", function () {
-    if (document.hidden && hasInk && !drawing) {
-      save(padKey, canvas.toDataURL("image/png"));
-    }
+    if (document.hidden && !drawing) saveSync();
   });
 
   let startY = null;
@@ -187,6 +203,7 @@ function buildPad(cfg) {
     setTimeout(function () {
       if (hasInk) addDiscard(cfg, canvas);
       clearTimeout(saveTimer);
+      rev++;
       ctx.globalCompositeOperation = "source-over";
       ctx.clearRect(0, 0, SIZE, SIZE);
       hasInk = false;
